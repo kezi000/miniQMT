@@ -138,13 +138,20 @@ class PositionMonitorSell:
                 
                 # 获取当前持仓
                 positions = self.position_manager.get_all_positions()
-                if not positions:
+                # 修复DataFrame布尔值判断错误
+                if positions is None or (isinstance(positions, pd.DataFrame) and positions.empty) or (isinstance(positions, dict) and not positions):
                     logger.debug("当前无持仓，无需监控")
                     time.sleep(10)
                     continue
                 
                 # 监控每只持仓股票
-                for stock_code in list(positions.keys()):
+                # 处理DataFrame和字典两种格式
+                if isinstance(positions, pd.DataFrame):
+                    stock_codes = positions['stock_code'].tolist()
+                else:
+                    stock_codes = list(positions.keys())
+                    
+                for stock_code in stock_codes:
                     if self.stop_flag:
                         break
                     
@@ -248,12 +255,14 @@ class PositionMonitorSell:
                     price=current_price,
                     strategy=f"监控卖出-{rule_name}"
                 )
-                if result and result.get('success', False):
+                # 修复：trading_executor.sell_stock返回的是订单ID(字符串)或None，而不是字典
+                if result:  # 如果返回了订单ID，表示成功
+                    logger.info(f"[实盘交易] {stock_code} 卖出委托提交成功，订单ID: {result}")
+                    return True
                     logger.info(f"[实盘交易] {stock_code} 卖出委托提交成功")
                     return True
                 else:
-                    error_msg = result.get('message', '未知错误') if result else '返回结果为空'
-                    logger.error(f"[实盘交易] {stock_code} 卖出失败: {error_msg}")
+                    logger.error(f"[实盘交易] {stock_code} 卖出失败，未获取到订单ID")
                     return False
             
         except Exception as e:
@@ -287,12 +296,6 @@ class PositionMonitorSell:
                 logger.info("当前无持仓")
                 return
             
-            # 🔍 调试：打印原始数据
-            logger.info("=== 原始持仓数据调试 ===")
-            for index, row in positions.iterrows():
-                logger.info(f"原始数据 - 股票: {row.get('stock_code')}, 成本价: {row.get('cost_price')}, 当前价: {row.get('current_price')}, 盈亏比例: {row.get('profit_ratio')}")
-            logger.info("=== 原始数据调试结束 ===")
-            
             # 初始化累计变量
             total_profit = 0
             total_cost = 0
@@ -308,72 +311,79 @@ class PositionMonitorSell:
                 logger.info(f"{Colors.BLUE}{'=' * 110}{Colors.END}")
                 
                 for index, row in positions.iterrows():
-                    stock_code = str(row.get('stock_code', '')).strip()
-                    stock_name = str(row.get('stock_name', '')).strip()[:8]  # 限制名称长度
-                    volume = float(row.get('volume', 0))
-                    cost_price = float(row.get('cost_price', 0))
-                    current_price = float(row.get('current_price', 0))
-                    market_value = float(row.get('market_value', 0))
-                    available = float(row.get('available', 0))
-                    
-                    # 过滤无效持仓：跳过数量为0或股票代码异常的记录
-                    if volume <= 0 or not stock_code:
-                        logger.debug(f"跳过无效持仓: {stock_code}, 数量={volume}, 成本价={cost_price}")
-                        continue
-
-
-                    
-                    # 放宽条件，允许成本价为0或股票代码长度小于6
-                    if cost_price <= 0:
-                        logger.warning(f"持仓 {stock_code} 成本价为0，但仍将显示")
-                    if len(stock_code) < 6:
-                        logger.warning(f"持仓 {stock_code} 代码长度异常，但仍将显示")
-                    
-                    # 获取最新价格 (使用xtdata.get_full_tick)
                     try:
-                        # 为股票代码添加市场后缀
-                        formatted_stock_code = self._format_stock_code(stock_code)
-                      
-                        logger.debug(f"尝试获取股票 {formatted_stock_code} 的实时行情数据...")
+                        stock_code = str(row.get('stock_code', '')).strip()
+                        # 安全获取股票名称，如果不存在则使用空字符串
+                        stock_name = str(row.get('stock_name', stock_code)).strip()[:8]  # 限制名称长度，如果没有名称则使用代码
+                        volume = float(row.get('volume', 0))
+                        cost_price = float(row.get('cost_price', 0))
+                        current_price = float(row.get('current_price', 0))
+                        market_value = float(row.get('market_value', 0))
+                        available = float(row.get('available', 0))
                         
-                        tick_data = xtdata.get_full_tick([formatted_stock_code])
-                        if tick_data and formatted_stock_code in tick_data and 'lastPrice' in tick_data[formatted_stock_code] and tick_data[formatted_stock_code]['lastPrice'] is not None and float(tick_data[formatted_stock_code]['lastPrice']) > 0:
-                            current_price = float(tick_data[formatted_stock_code]['lastPrice'])
-                            logger.info(f"获取 {stock_code} 最新价格 (xtdata.get_full_tick): {current_price}")
-                        else:
-                            logger.warning(f"无法通过xtdata.get_full_tick获取 {stock_code} 最新价格，使用数据库中的价格: {current_price}")
-                    except Exception as e:
-                        logger.warning(f"通过xtdata.get_full_tick获取 {stock_code} 最新价格失败: {str(e)}，使用数据库中的价格: {current_price}")
+                        # 过滤无效持仓：跳过数量为0或股票代码异常的记录
+                        if volume <= 0 or not stock_code:
+                            logger.debug(f"跳过无效持仓: {stock_code}, 数量={volume}, 成本价={cost_price}")
+                            continue
+                        
+                        # 放宽条件，允许成本价为0或股票代码长度小于6
+                        if cost_price <= 0:
+                            logger.warning(f"持仓 {stock_code} 成本价为0，但仍将显示")
+                        if len(stock_code) < 6:
+                            logger.warning(f"持仓 {stock_code} 代码长度异常，但仍将显示")
+                        
+                        # 获取最新价格 (使用xtdata.get_full_tick)
+                        try:
+                            # 为股票代码添加市场后缀
+                            formatted_stock_code = self._format_stock_code(stock_code)
+                          
+                            logger.debug(f"尝试获取股票 {formatted_stock_code} 的实时行情数据...")
+                            
+                            tick_data = xtdata.get_full_tick([formatted_stock_code])
+                            if tick_data and formatted_stock_code in tick_data and 'lastPrice' in tick_data[formatted_stock_code] and tick_data[formatted_stock_code]['lastPrice'] is not None and float(tick_data[formatted_stock_code]['lastPrice']) > 0:
+                                current_price = float(tick_data[formatted_stock_code]['lastPrice'])
+                                logger.info(f"获取 {stock_code} 最新价格 (xtdata.get_full_tick): {current_price}")
+                            else:
+                                logger.warning(f"无法通过xtdata.get_full_tick获取 {stock_code} 最新价格，使用数据库中的价格: {current_price}")
+                        except Exception as e:
+                            logger.warning(f"通过xtdata.get_full_tick获取 {stock_code} 最新价格失败: {str(e)}，使用数据库中的价格: {current_price}")
 
-                    
-                    # 重新计算盈亏比例和盈亏金额，确保准确性
-                    if cost_price > 0 and current_price > 0:
-                        profit_ratio = round(100 * (current_price - cost_price) / cost_price, 2)
-                        profit_amount = round(volume * (current_price - cost_price), 2)
-                        logger.info(f"计算 {stock_code} 盈亏: 成本价={cost_price}, 当前价={current_price}, 盈亏比例={profit_ratio}%, 盈亏金额={profit_amount}")
-                    else:
-                        profit_ratio = 0.0
-                        profit_amount = 0.0
-                        logger.warning(f"{stock_code} 价格数据异常: 成本价={cost_price}, 当前价={current_price}")
-                    
-                    # 不在这里累计统计，统一在后面计算
-                    
-                    # 根据盈亏设置颜色
-                    if profit_ratio > 0:
-                        profit_color_code = Colors.GREEN
-                        profit_icon = "📈"
-                    elif profit_ratio < 0:
-                        profit_color_code = Colors.RED
-                        profit_icon = "📉"
-                    else:
-                        profit_color_code = Colors.YELLOW
-                        profit_icon = "➖"
-                    
-                    # 格式化显示（带颜色，确保对齐）
-                    line = f"{stock_code:<8} {stock_name:<10} {volume:<8.0f} {cost_price:<8.2f} {current_price:<8.2f} {profit_amount:<10.2f} {profit_ratio:<7.2f}% {market_value:<12.2f} {available:<8.0f} {profit_icon:<4}"
-                    colored_line = f"{Colors.CYAN}{stock_code:<8}{Colors.END} {Colors.WHITE}{stock_name:<10}{Colors.END} {Colors.WHITE}{volume:<8.0f}{Colors.END} {Colors.WHITE}{cost_price:<8.2f}{Colors.END} {Colors.WHITE}{current_price:<8.2f}{Colors.END} {profit_color_code}{profit_amount:<10.2f}{Colors.END} {profit_color_code}{profit_ratio:<7.2f}%{Colors.END} {Colors.WHITE}{market_value:<12.2f}{Colors.END} {Colors.WHITE}{available:<8.0f}{Colors.END} {profit_color_code}{profit_icon:<4}{Colors.END}"
-                    logger.info(colored_line)
-                
+                        
+                        # 重新计算盈亏比例和盈亏金额，确保准确性
+                        if cost_price > 0 and current_price > 0:
+                            profit_ratio = round(100 * (current_price - cost_price) / cost_price, 2)
+                            profit_amount = round(volume * (current_price - cost_price), 2)
+                            logger.info(f"计算 {stock_code} 盈亏: 成本价={cost_price}, 当前价={current_price}, 盈亏比例={profit_ratio}%, 盈亏金额={profit_amount}")
+                        else:
+                            profit_ratio = 0.0
+                            profit_amount = 0.0
+                            logger.warning(f"{stock_code} 价格数据异常: 成本价={cost_price}, 当前价={current_price}")
+                        
+                        # 根据盈亏设置颜色
+                        if profit_ratio > 0:
+                            profit_color_code = Colors.GREEN
+                            profit_icon = "📈"
+                        elif profit_ratio < 0:
+                            profit_color_code = Colors.RED
+                            profit_icon = "📉"
+                        else:
+                            profit_color_code = Colors.YELLOW
+                            profit_icon = "➖"
+                        
+                        # 格式化显示（带颜色，确保对齐）
+                        line = f"{stock_code:<8} {stock_name:<10} {volume:<8.0f} {cost_price:<8.2f} {current_price:<8.2f} {profit_amount:<10.2f} {profit_ratio:<7.2f}% {market_value:<12.2f} {available:<8.0f} {profit_icon:<4}"
+                        colored_line = f"{Colors.CYAN}{stock_code:<8}{Colors.END} {Colors.WHITE}{stock_name:<10}{Colors.END} {Colors.WHITE}{volume:<8.0f}{Colors.END} {Colors.WHITE}{cost_price:<8.2f}{Colors.END} {Colors.WHITE}{current_price:<8.2f}{Colors.END} {profit_color_code}{profit_amount:<10.2f}{Colors.END} {profit_color_code}{profit_ratio:<7.2f}%{Colors.END} {Colors.WHITE}{market_value:<12.2f}{Colors.END} {Colors.WHITE}{available:<8.0f}{Colors.END} {profit_color_code}{profit_icon:<4}{Colors.END}"
+                        logger.info(colored_line)
+                        
+                        # 累计总盈亏和总成本
+                        total_profit += profit_amount
+                        total_cost += volume * cost_price
+                        total_market_value += market_value
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"处理持仓行时出错: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        continue  # 跳过这一行，继续处理其他行
             else:
                 # 字典格式（原有逻辑）
                 positions_count = len(positions)
@@ -400,7 +410,7 @@ class PositionMonitorSell:
                     if cost_price <= 0:
                         logger.warning(f"持仓 {stock_code} 成本价为0，但仍将显示")
                     if len(stock_code) < 6:
-                        logger.warning(f"持仓 {stock_code} 代码长度异常，但仍将显示")
+                        logger.warning(f"持仓 {stock_code} 代码长度异常，仍将显示")
                     
                     # 获取最新价格 (使用xtdata.get_full_tick)
                     try:
@@ -519,6 +529,8 @@ class PositionMonitorSell:
             
         except Exception as e:
             logger.error(f"显示当前持仓时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _show_stats(self):
         """显示统计信息"""

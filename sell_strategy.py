@@ -530,11 +530,37 @@ class SellStrategy:
             latest_data = self.data_manager.get_latest_data(stock_code)
             if not latest_data:
                 return False
+            # 根据配置的价格档位获取卖出价格
+            price_level = getattr(config, "SELL_PRICE_LEVEL", 3)  # 默认使用买三价
             
-            # 使用买三价或当前价
-            bid3_price = latest_data.get('bidPrice3', 0)
-            current_price = latest_data.get('lastPrice', 0)
-            sell_price = bid3_price if bid3_price > 0 else current_price
+            # 获取买盘价格
+            bid_prices = []
+            for i in range(1, 6):  # 买一价到买五价
+                bid_price = latest_data.get(f"bidPrice{i}", 0)
+                bid_prices.append(bid_price)
+            
+            # 确保价格档位在有效范围内
+            if price_level < 1 or price_level > 5:
+                price_level = 3  # 默认使用买三价
+            
+            # 获取对应档位的价格，如果为0则尝试其他档位
+            sell_price = 0
+            if bid_prices[price_level-1] > 0:
+                sell_price = bid_prices[price_level-1]
+            else:
+                # 如果指定档位价格为0，尝试其他档位
+                for price in bid_prices:
+                    if price > 0:
+                        sell_price = price
+                        break
+            
+            # 如果所有买盘价格都为0，使用当前价
+            current_price = latest_data.get("lastPrice", 0)
+            if sell_price == 0:
+                sell_price = current_price
+                
+            logger.info(f"卖出价格档位: {price_level}, 使用价格: {sell_price}")
+
             
             logger.info(f"执行卖出: {stock_code}, 原因: {reason}, 数量: {volume}, 价格: {sell_price}")
             
@@ -637,7 +663,8 @@ class SellStrategy:
             today = datetime.now().strftime('%Y%m%d')
             data = self.data_manager.get_market_data(stock_code, period='1d', count=1)
             
-            if data and len(data) > 0:
+            # 修复DataFrame布尔值判断错误
+            if data is not None and not data.empty and len(data) > 0:
                 return data.iloc[-1].to_dict()
             
             return None
@@ -651,7 +678,8 @@ class SellStrategy:
         try:
             data = self.data_manager.get_market_data(stock_code, period='1d', count=2)
             
-            if data and len(data) >= 2:
+            # 修复DataFrame布尔值判断错误
+            if data is not None and not data.empty and len(data) >= 2:
                 return float(data.iloc[-2]['close'])
             
             return None

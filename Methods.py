@@ -7,6 +7,13 @@ import datetime
 import time
 import requests
 import json
+import warnings
+
+# 忽略pandas的FutureWarning警告（来自mootdx库）
+warnings.filterwarnings('ignore', category=FutureWarning, module='mootdx')
+warnings.filterwarnings('ignore', message='.*fillna.*method.*deprecated.*')
+warnings.filterwarnings('ignore', message='.*Downcasting object dtype arrays.*')
+
 from MyTT import *
 from mootdx.quotes import Quotes
 

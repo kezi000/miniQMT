@@ -7,6 +7,13 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 import threading
+import warnings
+
+# 忽略pandas的FutureWarning警告（来自mootdx库）
+warnings.filterwarnings('ignore', category=FutureWarning, module='mootdx')
+warnings.filterwarnings('ignore', message='.*fillna.*method.*deprecated.*')
+warnings.filterwarnings('ignore', message='.*Downcasting object dtype arrays.*')
+
 import xtquant.xtdata as xt
 import Methods
 import config
@@ -691,6 +698,51 @@ class DataManager:
             logger.error(f"从数据库获取 {stock_code} 的历史数据时出错: {str(e)}")
             return pd.DataFrame()
 
+    
+    def get_market_data(self, stock_code, period='1d', count=1):
+        """
+        获取市场数据（兼容sell_strategy调用）
+        
+        参数:
+        stock_code (str): 股票代码
+        period (str): 周期，默认'1d'
+        count (int): 获取数据条数
+        
+        返回:
+        pandas.DataFrame: 市场数据
+        """
+        try:
+            # 调整股票代码格式
+            adjusted_code = self._adjust_stock(stock_code)
+            
+            # 使用Mootdx获取数据
+            df = Methods.getStockData(
+                code=adjusted_code.split('.')[0] if '.' in adjusted_code else adjusted_code,
+                offset=count,
+                freq=9,  # 日线
+                adjustflag='qfq'
+            )
+            
+            if df is not None and not df.empty:
+                # 重命名列以匹配期望格式
+                df = df.rename(columns={
+                    'datetime': 'date',
+                    'open': 'open',
+                    'high': 'high', 
+                    'low': 'low',
+                    'close': 'close',
+                    'volume': 'volume'
+                })
+                
+                logger.debug(f"获取 {stock_code} 市场数据成功，共 {len(df)} 条记录")
+                return df
+            else:
+                logger.warning(f"获取 {stock_code} 市场数据为空")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"获取 {stock_code} 市场数据时出错: {str(e)}")
+            return pd.DataFrame()
     
     def update_all_stock_data(self):
         """更新所有股票的历史数据"""

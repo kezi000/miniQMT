@@ -1,3 +1,4 @@
+__pycache__/
 __pycache__/config.cpython-310.pyc
 __pycache__/data_fetcher.cpython-310.pyc
 __pycache__/trade_engine.cpython-310.pyc
@@ -150,3 +151,4 @@ logs/qmt_trading.log
 logs/qmt_trading.log
 data/trading.db
 logs/
+data/
